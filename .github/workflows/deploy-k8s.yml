@@ -1,0 +1,207 @@
+name: Deploy to Kubernetes
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      
+    outputs:
+      backend-image: ${{ steps.meta-backend.outputs.tags }}
+      frontend-image: ${{ steps.meta-frontend.outputs.tags }}
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata for backend
+      id: meta-backend
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Extract metadata for frontend
+      id: meta-frontend
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        push: true
+        tags: ${{ steps.meta-backend.outputs.tags }}
+        labels: ${{ steps.meta-backend.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push frontend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        push: true
+        tags: ${{ steps.meta-frontend.outputs.tags }}
+        labels: ${{ steps.meta-frontend.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
+    environment: staging
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to Staging
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Update image tags in deployment files
+        sed -i "s|stocklive-backend:.*|${{ needs.build-and-push.outputs.backend-image }}|g" deployment/kubernetes/02-backend.yaml
+        sed -i "s|stocklive-frontend:.*|${{ needs.build-and-push.outputs.frontend-image }}|g" deployment/kubernetes/03-frontend.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f deployment/kubernetes/ --namespace=stocklive-staging
+        
+        # Wait for deployment to complete
+        kubectl rollout status deployment/stocklive-backend --namespace=stocklive-staging --timeout=300s
+        kubectl rollout status deployment/stocklive-frontend --namespace=stocklive-staging --timeout=300s
+
+    - name: Run Health Check
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Get service URL
+        SERVICE_URL=$(kubectl get service stocklive-frontend --namespace=stocklive-staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        # Wait for service to be ready
+        for i in {1..10}; do
+          if curl -f "http://${SERVICE_URL}/health" > /dev/null 2>&1; then
+            echo "✅ Health check passed"
+            break
+          fi
+          echo "⏳ Waiting for service to be ready... ($i/10)"
+          sleep 30
+        done
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-staging]
+    if: github.event.inputs.environment == 'production'
+    environment: production
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl for Production
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to Production
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Update image tags in deployment files
+        sed -i "s|stocklive-backend:.*|${{ needs.build-and-push.outputs.backend-image }}|g" deployment/kubernetes/02-backend.yaml
+        sed -i "s|stocklive-frontend:.*|${{ needs.build-and-push.outputs.frontend-image }}|g" deployment/kubernetes/03-frontend.yaml
+        
+        # Apply Kubernetes manifests with production namespace
+        kubectl apply -f deployment/kubernetes/ --namespace=stocklive-production
+        
+        # Wait for deployment to complete
+        kubectl rollout status deployment/stocklive-backend --namespace=stocklive-production --timeout=600s
+        kubectl rollout status deployment/stocklive-frontend --namespace=stocklive-production --timeout=600s
+
+    - name: Production Health Check
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Get production service URL
+        SERVICE_URL=$(kubectl get service stocklive-frontend --namespace=stocklive-production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        # Comprehensive health check for production
+        for i in {1..15}; do
+          if curl -f "http://${SERVICE_URL}/health" > /dev/null 2>&1; then
+            echo "✅ Production health check passed"
+            break
+          fi
+          echo "⏳ Waiting for production service... ($i/15)"
+          sleep 30
+        done
+
+  notify-datadog:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: always()
+    
+    steps:
+    - name: Send Datadog Event
+      uses: masci/datadog@v1
+      with:
+        api-key: ${{ secrets.DATADOG_API_KEY }}
+        app-key: ${{ secrets.DATADOG_APP_KEY }}
+        events: |
+          - title: "StockLive Deployment"
+            text: "Deployment completed for commit ${{ github.sha }}"
+            alert_type: "${{ needs.deploy-staging.result == 'success' && 'info' || 'error' }}"
+            tags:
+              - "service:stocklive"
+              - "environment:${{ github.event.inputs.environment || 'staging' }}"
+              - "version:${{ github.sha }}"

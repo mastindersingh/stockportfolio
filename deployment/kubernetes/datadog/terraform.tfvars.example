@@ -1,0 +1,9 @@
+# Terraform variables file for synthetic tests
+# Copy this to terraform.tfvars and fill in your actual values
+
+# Get these from Datadog -> Organization Settings -> API Keys & Application Keys
+datadog_api_key = "your_datadog_api_key_here"
+datadog_app_key = "your_datadog_app_key_here"
+
+# Get this from Datadog -> UX Monitoring -> RUM Applications (after creating a RUM app)
+datadog_rum_app_id = "your_rum_application_id_here"

@@ -1,0 +1,144 @@
+# Lightweight overrides tailored for Datadog Agent installs on the Docker Desktop Kubernetes cluster.
+# Apply alongside the official Datadog Helm chart (chart: datadog/datadog).
+
+nameOverride: datadog-agent
+fullnameOverride: datadog-agent
+
+targetSystem: "linux"
+
+commonLabels:
+  app.kubernetes.io/name: datadog
+  app.kubernetes.io/part-of: datadog-agent
+
+registry: public.ecr.aws/datadog
+
+datadog:
+  clusterName: docker-desktop
+  site: us3.datadoghq.com
+  logLevel: INFO
+
+  tags:
+    - env:dev
+    - app:stocklive
+    - service:stocklive-portfolio
+
+  kubelet:
+    tlsVerify: false
+
+  # API & APP keys are fetched from an existing secret (set api-key/app-key entries there)
+  apiKey: ""
+  apiKeyExistingSecret: datadog-keys
+  appKey: ""
+  appKeyExistingSecret: datadog-keys
+
+  # Keep the local install lean by disabling heavyweight collectors that require kernel features
+  kubeStateMetricsEnabled: true
+  kubeStateMetricsCore:
+    enabled: true
+
+  clusterChecks:
+    enabled: true
+
+  collectEvents: true
+
+  logs:
+    enabled: true
+    containerCollectAll: true
+    containerCollectUsingFiles: true
+    autoMultiLineDetection: true
+
+  dogstatsd:
+    useSocketVolume: false
+    useHostPort: false
+    useHostPID: false
+    nonLocalTraffic: false
+
+  useHostPID: false
+
+  apm:
+    portEnabled: true
+    socketEnabled: true
+    instrumentation:
+      enabled: true
+      targets:
+        - name: stocklive-backend
+          ddTraceVersions:
+            python: "2"
+        - name: stocklive-frontend
+          ddTraceVersions:
+            javascript: "5"
+    errorTrackingStandalone:
+      enabled: true
+
+  otlp:
+    receiver:
+      protocols:
+        http:
+          enabled: true
+          endpoint: "0.0.0.0:4318"
+          useHostPort: false
+        grpc:
+          enabled: false
+
+  processAgent:
+    enabled: true
+    processCollection: true
+    processDiscovery: true
+
+  systemProbe:
+    enabled: true
+
+  serviceMonitoring:
+    enabled: true
+
+  orchestratorExplorer:
+    enabled: true
+
+  helmCheck:
+    enabled: false
+
+  networkPolicy:
+    create: false
+
+clusterAgent:
+  enabled: true
+  replicas: 1
+  metricsProvider:
+    enabled: false
+    useDatadogMetrics: false
+    createReaderRbac: false
+  admissionController:
+    enabled: true
+    mutateUnlabelled: true
+    serviceAccountAnnotations: {}
+
+agents:
+  useHostNetwork: false
+  rbac:
+    create: true
+  containers:
+    agent:
+      env:
+        - name: DD_CORE_AGENT_ENABLED
+          value: "true"
+        - name: DD_APM_ENABLED
+          value: "true"
+        - name: DD_APM_NON_LOCAL_TRAFFIC
+          value: "true"
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 200m
+          memory: 512Mi
+    processAgent:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+    traceAgent:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi

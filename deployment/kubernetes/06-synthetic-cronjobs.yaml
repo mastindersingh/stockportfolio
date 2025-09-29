@@ -1,0 +1,194 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: stocklive-health-check
+  namespace: default
+  labels:
+    app: stocklive-health-check
+spec:
+  schedule: "*/5 * * * *" # Every 5 minutes
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: stocklive-health-check
+          annotations:
+            admission.datadoghq.com/enabled: "false"
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: health-checker
+            image: curlimages/curl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Health check script
+              echo "Starting health check at $(date)"
+              
+              # Check backend health
+              if curl -f -s http://stocklive-backend-service.default.svc.cluster.local:8000/api/health | grep -q "ok"; then
+                echo "✅ Backend health check passed"
+                # Send success metric to Datadog
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/check_run" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d '{
+                    "check": "stocklive.backend.health",
+                    "host_name": "kubernetes-cluster",
+                    "status": 0,
+                    "message": "Backend health check passed",
+                    "tags": ["env:dev", "service:stocklive-backend", "check:health"]
+                  }'
+              else
+                echo "❌ Backend health check failed"
+                # Send failure metric to Datadog
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/check_run" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d '{
+                    "check": "stocklive.backend.health",
+                    "host_name": "kubernetes-cluster",
+                    "status": 2,
+                    "message": "Backend health check failed",
+                    "tags": ["env:dev", "service:stocklive-backend", "check:health"]
+                  }'
+                exit 1
+              fi
+              
+              # Check frontend accessibility
+              if curl -f -s http://stocklive-frontend-service.default.svc.cluster.local:80/ > /dev/null; then
+                echo "✅ Frontend accessibility check passed"
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/check_run" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d '{
+                    "check": "stocklive.frontend.accessibility",
+                    "host_name": "kubernetes-cluster", 
+                    "status": 0,
+                    "message": "Frontend accessibility check passed",
+                    "tags": ["env:dev", "service:stocklive-frontend", "check:accessibility"]
+                  }'
+              else
+                echo "❌ Frontend accessibility check failed"
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/check_run" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d '{
+                    "check": "stocklive.frontend.accessibility",
+                    "host_name": "kubernetes-cluster",
+                    "status": 2, 
+                    "message": "Frontend accessibility check failed",
+                    "tags": ["env:dev", "service:stocklive-frontend", "check:accessibility"]
+                  }'
+                exit 1
+              fi
+              
+              # Test login functionality
+              LOGIN_RESPONSE=$(curl -s -X POST http://stocklive-backend-service.default.svc.cluster.local:8000/api/auth/login \
+                -H "Content-Type: application/json" \
+                -d '{"email":"mastinder@yahoo.com","password":"wonder"}')
+              
+              if echo "$LOGIN_RESPONSE" | grep -q "authenticated.*true"; then
+                echo "✅ Login functionality check passed"
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/check_run" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d '{
+                    "check": "stocklive.auth.login",
+                    "host_name": "kubernetes-cluster",
+                    "status": 0,
+                    "message": "Login functionality check passed",
+                    "tags": ["env:dev", "service:stocklive-backend", "check:auth"]
+                  }'
+              else
+                echo "❌ Login functionality check failed"
+                echo "Response: $LOGIN_RESPONSE"
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/check_run" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d '{
+                    "check": "stocklive.auth.login",
+                    "host_name": "kubernetes-cluster",
+                    "status": 2,
+                    "message": "Login functionality check failed",
+                    "tags": ["env:dev", "service:stocklive-backend", "check:auth"]
+                  }'
+                exit 1
+              fi
+              
+              echo "All health checks completed successfully at $(date)"
+            env:
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-keys
+                  key: api-key
+          
+---
+apiVersion: batch/v1
+kind: CronJob  
+metadata:
+  name: stocklive-performance-test
+  namespace: default
+  labels:
+    app: stocklive-performance-test
+spec:
+  schedule: "0 */2 * * *" # Every 2 hours
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: stocklive-performance-test
+          annotations:
+            admission.datadoghq.com/enabled: "false"
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: performance-tester
+            image: curlimages/curl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting performance test at $(date)"
+              
+              # Measure API response time
+              START_TIME=$(date +%s%3N)
+              if curl -f -s http://stocklive-backend-service.default.svc.cluster.local:8000/api/health > /dev/null; then
+                END_TIME=$(date +%s%3N)
+                RESPONSE_TIME=$((END_TIME - START_TIME))
+                echo "API response time: ${RESPONSE_TIME}ms"
+                
+                # Send performance metric to Datadog
+                curl -X POST "https://api.us3.datadoghq.com/api/v1/series" \
+                  -H "Content-Type: application/json" \
+                  -H "DD-API-KEY: ${DD_API_KEY}" \
+                  -d "{
+                    \"series\": [{
+                      \"metric\": \"stocklive.api.response_time\",
+                      \"points\": [[$(date +%s), ${RESPONSE_TIME}]],
+                      \"tags\": [\"env:dev\", \"service:stocklive-backend\", \"endpoint:health\"],
+                      \"host\": \"kubernetes-cluster\"
+                    }]
+                  }"
+                  
+                # Check if response time is acceptable (< 2 seconds)
+                if [ $RESPONSE_TIME -lt 2000 ]; then
+                  echo "✅ Performance check passed (${RESPONSE_TIME}ms < 2000ms)"
+                else
+                  echo "⚠️ Performance degraded (${RESPONSE_TIME}ms >= 2000ms)"
+                fi
+              else
+                echo "❌ Performance test failed - API not responding"
+              fi
+              
+              echo "Performance test completed at $(date)"
+            env:
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-keys
+                  key: api-key

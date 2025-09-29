@@ -1,0 +1,297 @@
+name: Datadog Synthetic Monitoring
+
+on:
+  schedule:
+    # Run health checks every 15 minutes
+    - cron: '*/15 * * * *'
+    # Run comprehensive tests every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of test to run'
+        required: true
+        default: 'health'
+        type: choice
+        options:
+        - health
+        - comprehensive
+        - performance
+
+env:
+  DD_SITE: datadoghq.com
+  DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+jobs:
+  health-check:
+    if: github.event.schedule == '*/15 * * * *' || github.event.inputs.test_type == 'health' || !github.event.inputs
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Basic Health Check
+      run: |
+        echo "🏥 Running health checks..."
+        
+        # Define endpoints to test
+        ENDPOINTS=(
+          "http://localhost/health"
+          "http://localhost/api/health"
+          "http://localhost/"
+        )
+        
+        # Test each endpoint
+        for endpoint in "${ENDPOINTS[@]}"; do
+          echo "Testing: $endpoint"
+          
+          # Use curl with timeout and retry
+          if curl -f -s --max-time 10 --retry 3 "$endpoint" > /dev/null; then
+            echo "✅ $endpoint - OK"
+            
+            # Send success metric to Datadog
+            curl -X POST "https://api.datadoghq.com/api/v1/series" \
+              -H "Content-Type: application/json" \
+              -H "DD-API-KEY: ${DD_API_KEY}" \
+              -d '{
+                "series": [{
+                  "metric": "stocklive.health.check",
+                  "points": [['$(date +%s)', 1]],
+                  "tags": ["endpoint:'$endpoint'", "status:success", "source:github_actions"]
+                }]
+              }'
+          else
+            echo "❌ $endpoint - FAILED"
+            
+            # Send failure metric to Datadog
+            curl -X POST "https://api.datadoghq.com/api/v1/series" \
+              -H "Content-Type: application/json" \
+              -H "DD-API-KEY: ${DD_API_KEY}" \
+              -d '{
+                "series": [{
+                  "metric": "stocklive.health.check",
+                  "points": [['$(date +%s)', 0]],
+                  "tags": ["endpoint:'$endpoint'", "status:failure", "source:github_actions"]
+                }]
+              }'
+              
+            # Create Datadog event for failure
+            curl -X POST "https://api.datadoghq.com/api/v1/events" \
+              -H "Content-Type: application/json" \
+              -H "DD-API-KEY: ${DD_API_KEY}" \
+              -d '{
+                "title": "StockLive Health Check Failed",
+                "text": "Health check failed for endpoint: '$endpoint'",
+                "alert_type": "error",
+                "tags": ["service:stocklive", "endpoint:'$endpoint'", "source:github_actions"]
+              }'
+          fi
+        done
+
+  comprehensive-test:
+    if: github.event.schedule == '0 */2 * * *' || github.event.inputs.test_type == 'comprehensive'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js for testing
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install testing dependencies
+      run: |
+        npm init -y
+        npm install --no-save axios cheerio
+
+    - name: Comprehensive API Testing
+      run: |
+        cat << 'EOF' > test_api.js
+        const axios = require('axios');
+        
+        const baseURL = 'http://localhost';
+        const apiClient = axios.create({
+          baseURL: baseURL,
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Datadog-Synthetic-Test/1.0'
+          }
+        });
+        
+        async function testAPI() {
+          const tests = [
+            { name: 'Homepage Load', endpoint: '/', method: 'GET' },
+            { name: 'API Health', endpoint: '/api/health', method: 'GET' },
+            { name: 'Login Endpoint', endpoint: '/api/auth/login', method: 'POST', 
+              data: { username: 'test', password: 'test' } }
+          ];
+          
+          for (const test of tests) {
+            const startTime = Date.now();
+            
+            try {
+              const response = test.method === 'POST' 
+                ? await apiClient.post(test.endpoint, test.data)
+                : await apiClient.get(test.endpoint);
+                
+              const responseTime = Date.now() - startTime;
+              
+              console.log(`✅ ${test.name}: ${response.status} (${responseTime}ms)`);
+              
+              // Send metrics to Datadog
+              const metric = {
+                series: [{
+                  metric: 'stocklive.api.response_time',
+                  points: [[Math.floor(Date.now() / 1000), responseTime]],
+                  tags: [
+                    `endpoint:${test.endpoint}`,
+                    `method:${test.method}`,
+                    'status:success',
+                    'source:github_actions'
+                  ]
+                }]
+              };
+              
+              await axios.post('https://api.datadoghq.com/api/v1/series', metric, {
+                headers: {
+                  'Content-Type': 'application/json',
+                  'DD-API-KEY': process.env.DD_API_KEY
+                }
+              });
+              
+            } catch (error) {
+              const responseTime = Date.now() - startTime;
+              console.log(`❌ ${test.name}: FAILED (${responseTime}ms) - ${error.message}`);
+              
+              // Send failure metrics
+              const metric = {
+                series: [{
+                  metric: 'stocklive.api.response_time',
+                  points: [[Math.floor(Date.now() / 1000), responseTime]],
+                  tags: [
+                    `endpoint:${test.endpoint}`,
+                    `method:${test.method}`,
+                    'status:failure',
+                    'source:github_actions'
+                  ]
+                }]
+              };
+              
+              await axios.post('https://api.datadoghq.com/api/v1/series', metric, {
+                headers: {
+                  'Content-Type': 'application/json',
+                  'DD-API-KEY': process.env.DD_API_KEY
+                }
+              });
+            }
+          }
+        }
+        
+        testAPI().catch(console.error);
+        EOF
+        
+        node test_api.js
+
+  performance-test:
+    if: github.event.inputs.test_type == 'performance'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Apache Bench
+      run: sudo apt-get update && sudo apt-get install -y apache2-utils
+
+    - name: Performance Testing
+      run: |
+        echo "🚀 Running performance tests..."
+        
+        # Test homepage performance
+        echo "Testing Homepage Performance..."
+        ab -n 100 -c 10 -g homepage_results.tsv http://localhost/ || true
+        
+        # Test API performance
+        echo "Testing API Performance..."
+        ab -n 50 -c 5 -g api_results.tsv http://localhost/api/health || true
+        
+        # Parse results and send to Datadog
+        if [ -f homepage_results.tsv ]; then
+          # Calculate average response time from ab results
+          AVG_RESPONSE=$(awk 'NR>1 {sum+=$9; count++} END {if(count>0) print sum/count; else print 0}' homepage_results.tsv)
+          
+          # Send performance metrics to Datadog
+          curl -X POST "https://api.datadoghq.com/api/v1/series" \
+            -H "Content-Type: application/json" \
+            -H "DD-API-KEY: ${DD_API_KEY}" \
+            -d '{
+              "series": [{
+                "metric": "stocklive.performance.avg_response_time",
+                "points": [['$(date +%s)', '${AVG_RESPONSE}']],
+                "tags": ["endpoint:homepage", "test_type:load", "source:github_actions"]
+              }]
+            }'
+        fi
+
+  create-datadog-dashboard:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.test_type == 'comprehensive'
+    
+    steps:
+    - name: Create/Update Datadog Dashboard
+      run: |
+        cat << 'EOF' > dashboard.json
+        {
+          "title": "StockLive - GitHub Actions Monitoring",
+          "description": "Monitoring dashboard for StockLive application with GitHub Actions synthetic tests",
+          "widgets": [
+            {
+              "definition": {
+                "title": "Health Check Status",
+                "type": "query_value",
+                "requests": [
+                  {
+                    "q": "avg:stocklive.health.check{*}",
+                    "aggregator": "avg"
+                  }
+                ],
+                "precision": 2
+              }
+            },
+            {
+              "definition": {
+                "title": "API Response Times",
+                "type": "timeseries",
+                "requests": [
+                  {
+                    "q": "avg:stocklive.api.response_time{*} by {endpoint}",
+                    "display_type": "line"
+                  }
+                ]
+              }
+            },
+            {
+              "definition": {
+                "title": "Performance Metrics",
+                "type": "timeseries",
+                "requests": [
+                  {
+                    "q": "avg:stocklive.performance.avg_response_time{*}",
+                    "display_type": "bars"
+                  }
+                ]
+              }
+            }
+          ],
+          "layout_type": "ordered"
+        }
+        EOF
+        
+        # Create/update dashboard via Datadog API
+        curl -X POST "https://api.datadoghq.com/api/v1/dashboard" \
+          -H "Content-Type: application/json" \
+          -H "DD-API-KEY: ${DD_API_KEY}" \
+          -d @dashboard.json
