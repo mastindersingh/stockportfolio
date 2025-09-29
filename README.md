@@ -1,8 +1,9 @@
 # 🚀 StockLive - Observable Financial Portfolio Application
 
-[![Build and Test](https://github.com/username/stocklive-datadog-k8s/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/username/stocklive-datadog-k8s/actions/workflows/build-and-test.yml)
-[![Deploy to Kubernetes](https://github.com/username/stocklive-datadog-k8s/actions/workflows/deploy-k8s.yml/badge.svg)](https://github.com/username/stocklive-datadog-k8s/actions/workflows/deploy-k8s.yml)
-[![Datadog Monitoring](https://github.com/username/stocklive-datadog-k8s/actions/workflows/datadog-synthetic-tests.yml/badge.svg)](https://github.com/username/stocklive-datadog-k8s/actions/workflows/datadog-synthetic-tests.yml)
+[![Build and Test](https://github.com/mastindersingh/stockportfolio/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/mastindersingh/stockportfolio/actions/workflows/build-and-test.yml)
+[![Deploy to Kubernetes](https://github.com/mastindersingh/stockportfolio/actions/workflows/deploy-k8s.yml/badge.svg)](https://github.com/mastindersingh/stockportfolio/actions/workflows/deploy-k8s.yml)
+[![Datadog Monitoring](https://github.com/mastindersingh/stockportfolio/actions/workflows/datadog-synthetic-tests.yml/badge.svg)](https://github.com/mastindersingh/stockportfolio/actions/workflows/datadog-synthetic-tests.yml)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=mastindersingh/stockportfolio)
 
 > **A production-ready financial portfolio application showcasing enterprise-level observability practices with Datadog APM, Infrastructure monitoring, and Synthetic testing on Kubernetes.**
 
