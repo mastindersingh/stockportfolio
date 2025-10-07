@@ -18,8 +18,10 @@ const links = [
   { label: 'My Portfolio', to: '/portfolio/me' },
   { label: 'Master Portfolio', to: '/portfolio/master' },
   { label: 'USA Portfolio', to: '/portfolio/usa' },
+  { label: 'Stock Search', to: '/stock-search' },
   { label: 'Lessons', to: '/lessons' },
   { label: 'Blog', to: '/blog' },
+  { label: 'AI Chat', to: '/chat' },
   { label: 'Contact', to: '/contact' }
 ];
 

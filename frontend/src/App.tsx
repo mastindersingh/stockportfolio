@@ -11,6 +11,8 @@ const Lessons = lazy(() => import('./pages/Lessons'));
 const Blog = lazy(() => import('./pages/Blog'));
 const Contact = lazy(() => import('./pages/Contact'));
 const Subscribe = lazy(() => import('./pages/Subscribe'));
+const Chat = lazy(() => import('./pages/Chat'));
+const StockSearch = lazy(() => import('./pages/StockSearch'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 const LoadingView = () => (
@@ -85,6 +87,22 @@ function App() {
                 element={
                   <ProtectedRoute>
                     <Subscribe />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/chat"
+                element={
+                  <ProtectedRoute>
+                    <Chat />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/stock-search"
+                element={
+                  <ProtectedRoute>
+                    <StockSearch />
                   </ProtectedRoute>
                 }
               />
